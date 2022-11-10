@@ -23,8 +23,10 @@ const port = process.env.NODE_PORT || 3000;
       clientId: process.env.OIDC_CLIENT_ID,
       privateKey: process.env.OIDC_PRIVATE_KEY,
       discoveryEndpoint: process.env.OIDC_ISSUER_DISCOVERY_ENDPOINT,
-      redirectUri: process.env.OIDC_REDIRECT_URI,
-      identityVerificationPublicKey: process.env.IV_PUBLIC_KEY
+      authorizeRedirectUri: process.env.OIDC_AUTHORIZE_REDIRECT_URI,
+      postLogoutRedirectUri: process.env.OIDC_LOGOUT_REDIRECT_URI,
+      identityVerificationPublicKey: process.env.IV_PUBLIC_KEY,
+      identityVerificationIssuer: process.env.IV_ISSUER      
     })
   );
 

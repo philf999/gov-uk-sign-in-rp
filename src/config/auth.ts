@@ -14,10 +14,10 @@ type AuthMiddlewareConfiguration = {
   clientId: string;
   privateKey: string;
   clientMetadata?: Partial<ClientMetadata>;
-  redirectUri?: string;
   authorizeRedirectUri?: string;
-  callbackRedirectUri?: string;
+  postLogoutRedirectUri?: string;
   identityVerificationPublicKey?: string;
+  identityVerificationIssuer?: string;
 } & (
   | {
       issuerMetadata: IssuerMetadata;
@@ -35,8 +35,17 @@ type IdentityCheckCredential = {
   }
 }
 
+// type AddressClaim = {
+//   Address: {
+//     name: Array<any>,
+//     birthDate: Array<any>
+//   }
+// }
+
 enum Claims {
-  CoreIdentity = "https://vocab.account.gov.uk/v1/coreIdentityJWT"
+  CoreIdentity = "https://vocab.account.gov.uk/v1/coreIdentityJWT",
+  Address = "https://vocab.account.gov.uk/v1/address",
+  Passport = "https://vocab.account.gov.uk/v1/passport"
 }
 
 type GovUkOneLoginUserInfo = {
@@ -45,6 +54,7 @@ type GovUkOneLoginUserInfo = {
 
 const STATE_COOKIE_NAME = "state";
 const NONCE_COOKIE_NAME = "nonce";
+const ID_TOKEN_COOKIE_NAME = "id-token";
 
 function readPrivateKey(privateKey: string) {
   return createPrivateKey({
@@ -119,25 +129,56 @@ export async function auth(configuration: AuthMiddlewareConfiguration) {
   const client = createClient(configuration, issuer);
 
   const router = Router();
-
+  const claimsRequest = JSON.stringify({"userinfo":{
+    [Claims.CoreIdentity]:null,
+    [Claims.Address]:null //{"value":"27 Geoff Lane"}
+  }});
   // Construct the url and redirect on to the authorization endpoint
   router.get("/oauth/login", (req: Request, res: Response) => {
-    const redirectUri =
+    const authorizeRedirectUri =
       configuration.authorizeRedirectUri ||
-      configuration.redirectUri ||
       getRedirectUri(req);
     const nonce = generators.nonce();
     const state = generators.state();
     const authorizationUrl = client.authorizationUrl({
-      redirect_uri: redirectUri,
+      redirect_uri: authorizeRedirectUri,
+      response_type: "code",
+      scope: "openid email phone",
+      state: hash(state),
+      nonce: hash(nonce),
+      prompt: "login",
+      vtr: `["Cl.Cm"]`, //Q: Confirm if the order and case is important
+      //vtr: `["Cl"]`,
+      claims: claimsRequest
+    });
+    console.log(authorizationUrl);
+    // Store the nonce and state in a session cookie so it can be checked in callback
+    res.cookie(NONCE_COOKIE_NAME, nonce, {
+      httpOnly: true,
+    });
+    res.cookie(STATE_COOKIE_NAME, state, {
+      httpOnly: true,
+    });
+
+    // Redirect to the authorization server
+    res.redirect(authorizationUrl);
+  });
+
+  router.get("/oauth/verify", (req: Request, res: Response) => {
+    const authorizeRedirectUri =
+      configuration.authorizeRedirectUri ||
+      getRedirectUri(req);
+    const nonce = generators.nonce();
+    const state = generators.state();
+    const authorizationUrl = client.authorizationUrl({
+      redirect_uri: authorizeRedirectUri,
       response_type: "code",
       scope: "openid email phone offline_access",
       state: hash(state),
       nonce: hash(nonce),
       vtr: `["P2.Cl.Cm"]`, //Q: Confirm if the order and case is important
-      claims: JSON.stringify({"userinfo":{[Claims.CoreIdentity]:{"essential":true}}})
+      claims: claimsRequest
     });
-
     // Store the nonce and state in a session cookie so it can be checked in callback
     res.cookie(NONCE_COOKIE_NAME, nonce, {
       httpOnly: true,
@@ -159,11 +200,10 @@ export async function auth(configuration: AuthMiddlewareConfiguration) {
         `${req.query.error} - ${req.query.error_description}`
       );
     }
-
+    
     // Get all the parameters to pass to the token exchange endpoint
-    const redirectUri =
-      configuration.callbackRedirectUri ||
-      configuration.redirectUri ||
+    const authorizeRedirectUri = 
+      configuration.authorizeRedirectUri ||
       getRedirectUri(req);
     const params = client.callbackParams(req);
     const nonce = req.cookies[NONCE_COOKIE_NAME];
@@ -171,13 +211,26 @@ export async function auth(configuration: AuthMiddlewareConfiguration) {
 
     // Exchange the access code in the url parameters for an access token.
     // The access token is used to authenticate the call to get userinfo.
-    const tokenSet = await client.callback(redirectUri, params, {
+    const tokenSet = await client.callback(authorizeRedirectUri, params, {
       state: hash(state),
       nonce: hash(nonce),
     });
 
     if (!tokenSet.access_token) {
       throw new Error("No access token received");
+    }
+    else {
+      console.log(tokenSet.access_token);
+    }
+
+    if (!tokenSet.id_token) {
+      throw new Error("No id token received");
+    }
+    else {
+      console.log(tokenSet.id_token);
+      res.cookie(ID_TOKEN_COOKIE_NAME, tokenSet.id_token, {
+        httpOnly: true,
+      });
     }
 
     // Use the access token to authenticate the call to userinfo
@@ -198,6 +251,8 @@ export async function auth(configuration: AuthMiddlewareConfiguration) {
     */
 
     let identityCheckCredential: IdentityCheckCredential | null = null;
+    let addressClaim: any | null = null;
+    let passportClaim: any | null = null;
 
     // The core identity claim is present.
     // If the core identity claim is not present GOV.UK One Login
@@ -212,7 +267,7 @@ export async function auth(configuration: AuthMiddlewareConfiguration) {
       // Check the validity of the claim using the public key
       const publicKey = readPublicKey(configuration.identityVerificationPublicKey!);
       const { payload } = await jwtVerify(coreIdentityJWT, publicKey, {
-        issuer: "identity.integration.account.gov.uk"
+        issuer: configuration.identityVerificationIssuer
       });
 
       // Check the Vector of Trust (vot) to ensure the expected level of confidence was achieved.
@@ -223,12 +278,46 @@ export async function auth(configuration: AuthMiddlewareConfiguration) {
       identityCheckCredential = payload.vc as IdentityCheckCredential;
     } 
 
+    if(Claims.Address in userinfo){
+      addressClaim = Reflect.get(userinfo, Claims.Address);
+    }
+
+    if(Claims.Passport in userinfo){
+      passportClaim = Reflect.get(userinfo, Claims.Passport);
+    }
+
     res.render("migrate.njk", {
       userinfo,
       identityCheckCredential,
+      addressClaim,
+      passportClaim
     });
 
   }));
 
+  router.get("/oauth/logout", (req: Request, res: Response) => {
+    // this handles the logout button click event
+    const redirectUri =
+    configuration.postLogoutRedirectUri;
+
+    const state = req.cookies[STATE_COOKIE_NAME];
+    const idtoken = req.cookies[ID_TOKEN_COOKIE_NAME];
+    const logoutUrl = client.endSessionUrl({
+      post_logout_redirect_uri: redirectUri,
+      id_token_hint: idtoken,    
+      state: hash(state)
+    })
+    
+    res.redirect(logoutUrl);
+  });
+
+  router.get("/auth/logout", (req: Request, res: Response) => {
+    // this is the post logout redirect URL handler
+    res.clearCookie(ID_TOKEN_COOKIE_NAME);
+    res.render("loggedout.njk", {
+      message: "You have been logged out"
+    });
+  });
+
   return router;
-}
+} 

@@ -15,7 +15,7 @@
               text: "Subject identifier"
             },
             value: {
-              text: sub
+              text: userinfo.sub
             }
           },
           {
@@ -23,7 +23,7 @@
               text: "Email Address"
             },
             value: {
-              text: email
+              text: userinfo.email
             }
           },
           {
@@ -31,7 +31,34 @@
               text: "Phone Number"
             },
             value: {
-              text: phone_number
+              text: userinfo.phone_number
+            }
+          }
+          ,
+          {
+            key: {
+              text: "vc"
+            },
+            value: {
+              text: identityCheckCredential | dump(2)
+            }
+          }
+          ,
+          {
+            key: {
+              text: "Address"
+            },
+            value: {
+              text: addressClaim | dump(2)
+            }
+          }
+          ,
+          {
+            key: {
+              text: "Passport"
+            },
+            value: {
+              text: passportClaim | dump(2)
             }
           }
         ]
@@ -42,6 +69,15 @@
         href: "/"
       }) }}
 
+      {{ govukButton({
+        text: "Verify identity",
+        href: "verify"
+      }) }}
+
+      {{ govukButton({
+        text: "Logout",
+        href: "logout"
+      }) }}
     </div>
   </main>
 </div>
